@@ -13,9 +13,15 @@ Data Format:
  --------------------------------------------------------------------------------------------------
  | Header Information | Data Block | Checksum | Data Block | Checksum | [Repeat] | Final Checksum |
  --------------------------------------------------------------------------------------------------
-                      [        Chunk 1        ]
-                                              [        Chunk 2        ]
 
+
+Supported Hashing Types:
+	md5
+	sha256
+	sha512
+	md5+sha256
+	md5+sha512
+	sha256+sha512
 
 Usage:
 	dd2op [options] file.bin cool_file.ddop
