@@ -63,7 +63,7 @@ Note that the default EOF hashing algorithim is sha512._
     ```
     $ dd2op -s 64 --hash-type md5 example_file.bin
     8d0d603081614dd6f204db8a4b8343fe
-    $ dd2op --block-size 64 --hash-type md5 64 example_file.bin
+    $ dd2op --block-size 64 --hash-type md5 example_file.bin
     8d0d603081614dd6f204db8a4b8343fe
     ```
 
