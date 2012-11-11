@@ -1,115 +1,129 @@
 #!/usr/local/bin/python2.7
 
+import argparse
+import binascii
 import hashlib
+import itertools as it
 from pprint import pprint
 import struct
 import sys
 
-#0:md5:16
-#1:md5:16
-#2:sha256:32
-#3:sha512:64
-#4:sha3
 
-def build_header():
-    bin_length = 512
-    total_len = 1024
-    block_len = 128
-    block_hash_type = 0
-    final_hash_type = 3
-    encrypted = 0
-    
-    padding = 494
-    header = struct.pack("iiihhh{padding}s".format(padding=padding), bin_length, total_len, block_len, block_hash_type, final_hash_type, encrypted, '\xFF' * padding)
-    return header
-
-def read_header(file):
+def get_second_third(array):
+    i = 0
     try:
-        header = file.read(512)
-    except IOError:
-        print "Unable to read the header, corruption suspected."
-    
-    return struct.unpack("iiihhh494s", header)
-    
+        while True:
+            yield array[i]
+            yield array[i + 1]
+            i += 3
+    except:
+        return
 
-def read_chunks_from_binary(file, chunk_size=1024*64):
+
+def read_chunks_from_binary(file, chunk_size=16):
     for chunk in iter(lambda: file.read(chunk_size), b''):
         if chunk:
             yield chunk
         else:
             return
 
-def read_chunks_from_opdd(file, chunk_size=1024*64, hash_type=0):
-    while True:
+
+def read_binary_file(filename, chunk_size=16):
+    with open(filename, 'rb') as file:
+        return list(read_chunks_from_binary(file, chunk_size))
+
+
+def write_binary_file(filename, chunks):
+    try:
+        with open(filename, 'wb') as file:
+            for chunk in chunks:
+                file.write(chunk)
+    except IOError:
+        return False
+    return True
+
+
+def write_op_file(chunks, chunk_size, filename, hashtype):
+    pairs = zip(chunks[::2], chunks[1::2])
+    pairity = [''.join([chr(ord(x) ^ ord(y)) for x, y in zip(u, t)]) for u, t in pairs]
+
+    try:
+        x1, x2 = zip(*pairs)
+        chunks = zip(x1, x2, pairity)
+    except ValueError:
+        print "Can't calculate parity from an empty file"
+        return
+
+    # pprint(chunks)
+
+    hash = {'SHA512':   hashlib.sha512(),
+            'SHA256':   hashlib.sha256(),
+            'SHA128':   hashlib.sha256(),
+            'MD5':      hashlib.md5()
+            }[hashtype.upper()]
+
+    with open(filename, 'wb') as file:
+        for chunk in chunks:
+            for block in chunk:
+                length = len(block)
+                hash.update(block)
+                file.write(block)
+                file.write("\x00" * (16 - length))
+        file.write("\x00\x01" * (chunk_size))
+        file.write(hash.digest())
+        # print "pre-end"
+        file.write("\x00\x01" * (chunk_size))
+        print hash.hexdigest()
+
+
+def read_op_file(file, chunk_size=16):
+    chunks = list(read_chunks_from_binary(file, chunk_size))
+
+    data = [x for x in get_second_third(chunks[:-8])]
+    parity = chunks[2:-8:3]
+    data[-1] = data[-1].rstrip("\x00")
+    checksum_with_padding = chunks[-8:]
+
+    return data, parity, checksum_with_padding[2:5]
+
+
+def main(args):
+    pprint(args)
+
+    if args.check_file:
+        pass
+    else:
+        chunks = read_binary_file(args.filename, args.chunk_size)
+        if not args.dont_backup:
+            write_binary_file(args.filename + ".backup", chunks)
+        write_op_file(chunks, args.chunk_size, args.filename + ".dd2op", args.hash_type)
         try:
-            chunk = file.read(chunk_size)
-            hash = file.read(64)
-            if hash_type == 0:
-                if '\x00' * 64 == hash:
-                    yield chunk
-            elif hash_type == 1:
-                if hashlib.md5(chunk).digest() + '\x00' * 48:
-                    yield chunk
-            elif hash_type == 2:
-                if hashlib.sha256(chunk).digest() + '\x00' * 32:
-                    yield chunk
-            elif hash_type == 3:
-                if hashlib.sha512(chunk).digest():
-                    yield chunk
-            else:
-                yield None
+            with open(args.filename + ".dd2op", 'rb') as f:
+                read_op_file(f, args.chunk_size)
         except IOError:
-            return
+            print "Error, dd2op failed to create a dd2op file"
 
 
-def hash_chunks(chunks, hash_type):
-    for chunk in chunks:
-        yield chunk
-        if hash_type == 0:
-            yield '\x00' * 64
-        elif hash_type == 1:
-            yield hashlib.md5(chunk).digest() + '\x00' * 48
-        elif hash_type == 2:
-            yield hashlib.sha256(chunk).digest() + '\x00' * 32
-        elif hash_type == 3:
-            yield hashlib.sha512(chunk).digest()
+def parse_args():
+    parser = argparse.ArgumentParser(prog="dd2op")
+    parser.add_argument("-1", action="store_true", default=True,
+        help="Use data format v1, Simple Parity")
+    parser.add_argument("-2", action="store_true", default=False,
+        help="Use data format v2, Cooler Parity. Note: This doesn't work yet")
+    parser.add_argument("-c", "--check-file", action="store_true",
+        default=False, help="Check for issues instead of instead of create")
+    parser.add_argument("-d", "--dont-backup", action="store_true",
+        default=False, help="By default this makes a backup of the file before creating a dd2op file. This will cause it not to.")
+    parser.add_argument("-f", "--fix-file", action="store_true", default=False,
+        help="Fix any errors found durring a check, has no effect if -c argument is not used")
+    parser.add_argument("-s", "--block-size", metavar="block-length",
+        dest="chunk_size", type=int, default=16, help="Block size of parity blocks")
+    parser.add_argument("--hash-type", type=str, default="SHA512",
+        choices=['md5', 'sha128', 'sha256', 'sha512'],
+        help="EOF checksum type (MD5, SHA128, SHA256, SHA512)\nDefaults: SHA512")
+    parser.add_argument("filename", type=str,
+        help="The name of the file you want ddop'd")
+    return parser.parse_args()
 
-def read_op_file(header_length, file):
-    header = struct.unpack("iiihhh494s", file.read(512))
-    
-    chunks = list(read_chunks_from_opdd(file, 256, 1))
-    
-    return chunks
-
-def read_binary_file(file):
-    bin = list(read_chunks_from_binary(file, 256))
-    # pprint([type(x) for x in bin])
-    # pprint([len(x) for x in bin])
-    # pprint(bin)
-    return bin
-
-def write_op_file(header, chunks, file):
-    file.write(header)
-    
-    chunks = list(hash_chunks(chunks, 1))
-    pprint(len(chunks))
-    
-    for chunk in chunks:
-        file.write(chunk)
-
-def main():
-    with open(sys.argv[1], 'rb') as f:
-        chunks = read_binary_file(f)
-    with open(sys.argv[2], 'wb') as f:
-        header = build_header()
-        pprint(header[:18])
-        write_op_file(header, chunks, f)
-    with open(sys.argv[2], 'rb') as f:
-        pprint(read_header(f)[:-1])
-    
-    # with open(sys.argv[2], 'rb') as f:
-        # pprint(read_op_file(512, f))
-    
-    
 if __name__ == "__main__":
-    main()
+    main(parse_args())
